@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1f9bd7">
+<title>טפסי חתימה בשטח</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <button id="backBtn" class="iconbtn" hidden aria-label="חזרה">›</button>
+  <h1 id="title">טפסי חתימה בשטח</h1>
+  <span id="net" class="net"></span>
+</header>
+
+<main>
+  <section id="v-list">
+    <div class="stats" id="stats"></div>
+    <div class="filters">
+      <input id="q" type="search" placeholder="חיפוש: מספר מבנה / אתר / קהילה" autocomplete="off">
+      <select id="siteSel" aria-label="סינון לפי אתר"></select>
+      <div class="seg" id="statSeg">
+        <button data-s="all" class="on">הכל</button>
+        <button data-s="open">ממתינים</button>
+        <button data-s="signed">נחתמו</button>
+      </div>
+    </div>
+    <div id="list"></div>
+    <div id="empty" class="empty" hidden>עדיין אין מבנים.<br>עבור ללשונית "ייבוא / ייצוא" וטען קובץ Excel.</div>
+  </section>
+
+  <section id="v-form" hidden></section>
+
+  <section id="v-export" hidden>
+    <div class="card">
+      <h2>ייבוא מבנים</h2>
+      <p class="hint">קובץ Excel או CSV עם העמודות: מספר מבנה, שם אתר, קהילה, שמות נציגים (אפשר להשאיר ריק), ושדות השאלות. מבנים שכבר נחתמו לא יידרסו.</p>
+      <div class="row">
+        <label class="btn primary filebtn">בחר קובץ לייבוא<input id="impFile" type="file" accept=".xlsx,.xls,.csv,.json" hidden></label>
+        <button class="btn" id="tplBtn">הורד תבנית Excel</button>
+      </div>
+      <div id="impMsg" class="note" hidden></div>
+    </div>
+
+    <div class="card">
+      <h2>הגדרות טופס</h2>
+      <p class="hint">קובץ הגדרות (JSON) שמכיל את נוסח הטופס, הלוגו ושמות החותמים. נטען פעם אחת ונשמר במכשיר.</p>
+      <p class="hint" id="cfgState"></p>
+      <div class="row">
+        <label class="btn filebtn">טען קובץ הגדרות<input id="cfgFile" type="file" accept=".json,application/json" hidden></label>
+        <button class="btn" id="cfgReset">חזרה לברירת מחדל</button>
+      </div>
+      <div id="cfgMsg" class="note" hidden></div>
+    </div>
+
+    <div class="card">
+      <h2>ייצוא</h2>
+      <div id="expStats" class="hint"></div>
+      <div class="row col">
+        <button class="btn primary" id="csvBtn">CSV ל-Monday (כל המבנים)</button>
+        <button class="btn" id="csvSignedBtn">CSV – רק מבנים שנחתמו</button>
+        <label class="chk"><input type="checkbox" id="onlyNew" checked> ZIP: רק קבצים שטרם יוצאו</label>
+        <button class="btn primary" id="zipBtn">ZIP של כל ה-PDF החתומים</button>
+        <button class="btn" id="bakBtn">גיבוי נתונים (JSON)</button>
+      </div>
+      <div id="expMsg" class="note" hidden></div>
+    </div>
+
+    <div class="card">
+      <h2>מצב האפליקציה</h2>
+      <p class="hint" id="swState">בודק…</p>
+      <p class="hint" id="persistState"></p>
+      <button class="btn danger" id="wipeBtn">מחיקת כל הנתונים במכשיר</button>
+    </div>
+  </section>
+</main>
+
+<nav class="tabs">
+  <button data-tab="list" class="on">מבנים</button>
+  <button data-tab="export">ייבוא / ייצוא</button>
+</nav>
+
+<div id="doc-stage" aria-hidden="true"></div>
+<div id="modal-root"></div>
+<div id="toast" role="status"></div>
+
+<script src="lib/xlsx.mini.min.js"></script>
+<script src="lib/html2canvas.min.js"></script>
+<script src="lib/jspdf.umd.min.js"></script>
+<script src="lib/jszip.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

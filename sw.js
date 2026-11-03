@@ -1,4 +1,4 @@
-const CACHE = 'field-forms-v1.1.0';
+const CACHE = 'field-forms-v1.2.0';
 const FILES = [
   './', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest',
   'lib/xlsx.mini.min.js', 'lib/html2canvas.min.js', 'lib/jspdf.umd.min.js', 'lib/jszip.min.js',

@@ -1,6 +1,6 @@
 'use strict';
 /* ============ הגדרות ============ */
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const ZIP_CHUNK = 60; // כמה PDF בכל קובץ ZIP
 const QFIELDS = [
   { key: 'electric', label: 'רישום שעון חשמל', mode: 'decimal' },
@@ -33,7 +33,7 @@ function applyConfig(cfg) {
   CFG = { ...DEFAULT_CONFIG, ...(cfg || {}) };
   SIGNERS = CFG.signers;
   COLS_CORE = [
-    ['מספר מבנה', r => r.id],
+    ['מספר מבנה', r => r.num],
     ['שם אתר', r => r.site],
     ['קהילה', r => r.community],
     ...SIGNERS.flatMap(s => [
@@ -119,6 +119,7 @@ const DB = {
   },
   all() { return this.run('readonly', s => s.getAll()); },
   put(rec) { return this.run('readwrite', s => s.put(rec)); },
+  del(id) { return this.run('readwrite', s => s.delete(id)); },
   putMany(recs) { return this.run('readwrite', s => { recs.forEach(r => s.put(r)); }); },
   clear() { return this.run('readwrite', s => s.clear()); },
   getCfg() { return new Promise((res, rej) => { const q = this.db.transaction('meta', 'readonly').objectStore('meta').get('config'); q.onsuccess = () => res(q.result || null); q.onerror = () => rej(q.error); }); },
@@ -127,9 +128,12 @@ const DB = {
 
 /* ============ מודל נתונים ============ */
 const S = { map: new Map(), filter: { q: '', site: '', st: 'all' }, cur: null };
-function blankRec(id) {
+/* מזהה ייחודי = מספר מבנה + שם אתר (מספר מבנה לבדו אינו ייחודי) */
+const cleanTxt = v => String(v ?? '').replace(/\s+/g, ' ').trim();
+const mkKey = (num, site) => `${num}|${site}`;
+function blankRec(num, site = '') {
   return {
-    id: String(id), site: '', community: '',
+    id: mkKey(num, site), num: String(num), site, community: '',
     fields: { electric: '', water: '', keysFront: '', keysBack: '', acSigns: '', notes: '' },
     signers: Object.fromEntries(SIGNERS.map(s => [s.key, { name: '', sig: '' }])),
     extra: {}, pdf: null, pdfName: '', signedAt: '', exportedAt: '', updatedAt: Date.now(),
@@ -142,7 +146,7 @@ function hasData(r) {
 }
 const statusKey = r => (isSigned(r) ? 'signed' : hasData(r) ? 'draft' : 'new');
 const statusLabel = r => ({ signed: 'נחתם', draft: 'טיוטה', new: 'ממתין' }[statusKey(r)]);
-const sortedRecs = () => [...S.map.values()].sort((a, b) => natCmp(a.id, b.id));
+const sortedRecs = () => [...S.map.values()].sort((a, b) => natCmp(a.site, b.site) || natCmp(a.num, b.num));
 
 let saveTimer;
 function scheduleSave(rec) {
@@ -156,14 +160,14 @@ async function saveNow(rec) { clearTimeout(saveTimer); rec.updatedAt = Date.now(
 function buildAliases() {
   const m = {};
   const add = (key, list) => list.forEach(x => (m[norm(x)] = key));
-  add('id', ['מספר מבנה', 'מבנה', 'מס מבנה']);
+  add('num', ['מספר מבנה', 'מבנה', 'מס מבנה']);
   add('site', ['שם אתר', 'אתר', 'ישוב', 'שם ישוב', 'שם היישוב']);
   add('community', ['קהילה', 'שם קהילה', 'שם הקהילה']);
   SIGNERS.forEach(sg => {
     add('name:' + sg.key, ['שם ' + sg.label, sg.label]);
     add('sigcol', ['חתימת ' + sg.label, 'חתימה ' + sg.label]);
   });
-  add('sigcol', ['סטטוס', 'תאריך חתימה', 'קובץ PDF']);
+  add('sigcol', ['סטטוס', 'תאריך חתימה', 'קובץ PDF', 'מזהה מבנה']);
   add('f:electric', ['רישום שעון חשמל', 'שעון חשמל']);
   add('f:water', ['רישום מונה המים', 'רישום מונה מים', 'מונה מים', 'מונה המים']);
   add('f:keysFront', ['מספר מפתחות קיימים לדלת קדמית', 'מפתחות דלת קדמית', 'מפתחות קדמית']);
@@ -190,34 +194,35 @@ async function importFile(file) {
   const buf = await file.arrayBuffer();
   if (/\.json$/i.test(file.name)) return importBackup(buf);
   const rows = sheetRows(buf, file.name);
-  let hi = rows.findIndex((r, i) => i < 8 && r.some(c => HEAD_ALIASES[norm(c)] === 'id'));
+  let hi = rows.findIndex((r, i) => i < 8 && r.some(c => HEAD_ALIASES[norm(c)] === 'num'));
   if (hi < 0) throw new Error('לא נמצאה עמודה "מספר מבנה" בקובץ');
   const heads = rows[hi].map(c => String(c).trim());
   const map = heads.map(h => HEAD_ALIASES[norm(h)] || (h ? 'extra:' + h : ''));
-  const stat = { added: 0, updated: 0, skipped: 0, nokey: 0 };
-  const touched = [];
+  const stat = { added: 0, updated: 0, skipped: 0, nokey: 0, dup: 0 };
+  const touched = [], seen = new Map();
   for (const row of rows.slice(hi + 1)) {
-    const get = key => { const i = map.indexOf(key); return i < 0 ? '' : String(row[i] ?? '').trim(); };
-    const id = get('id');
-    if (!id) { if (row.some(c => String(c).trim())) stat.nokey++; continue; }
-    let rec = S.map.get(id);
+    const get = key => { const i = map.indexOf(key); return i < 0 ? '' : cleanTxt(row[i]); };
+    const num = get('num'), site = get('site'), comm = get('community');
+    if (!num) { if (row.some(c => cleanTxt(c))) stat.nokey++; continue; }
+    const key = mkKey(num, site);
+    let rec = seen.get(key) || S.map.get(key);
     const isNew = !rec;
     if (rec && isSigned(rec)) { stat.skipped++; continue; }
-    if (!rec) rec = blankRec(id);
+    if (!rec) rec = blankRec(num, site);
     fillSigners(rec);
-    const site = get('site'), comm = get('community');
-    if (site) rec.site = site;
     if (comm) rec.community = comm;
     SIGNERS.forEach(s => { const v = get('name:' + s.key); if (v) rec.signers[s.key].name = v; });
     QFIELDS.concat([{ key: 'notes' }]).forEach(f => { const v = get('f:' + f.key); if (v && !rec.fields[f.key]) rec.fields[f.key] = v; });
-    map.forEach((k, i) => { if (k.startsWith('extra:')) { const v = String(row[i] ?? '').trim(); if (v) rec.extra[k.slice(6)] = v; } });
+    map.forEach((k, i) => { if (k.startsWith('extra:')) { const v = cleanTxt(row[i]); if (v) rec.extra[k.slice(6)] = v; } });
     rec.updatedAt = Date.now();
-    touched.push(rec); isNew ? stat.added++ : stat.updated++;
+    if (seen.has(key)) { stat.dup++; continue; }
+    seen.set(key, rec); touched.push(rec); isNew ? stat.added++ : stat.updated++;
   }
   await DB.putMany(touched);
   touched.forEach(r => S.map.set(r.id, r));
   return `נוספו ${stat.added} מבנים, עודכנו ${stat.updated}` +
     (stat.skipped ? `\nדולגו ${stat.skipped} מבנים שכבר נחתמו` : '') +
+    (stat.dup ? `\nשורות כפולות (אותו מספר מבנה + אתר) אוחדו: ${stat.dup}` : '') +
     (stat.nokey ? `\nשורות ללא מספר מבנה (לא יובאו): ${stat.nokey}` : '');
 }
 
@@ -226,13 +231,13 @@ function extraKeys(recs) { const k = new Set(); recs.forEach(r => Object.keys(r.
 function csvCell(v) { v = String(v ?? ''); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
 function buildCsv(recs) {
   const ex = extraKeys(recs);
-  const head = [...COLS_CORE.map(c => c[0]), ...ex, ...COLS_TAIL.map(c => c[0])];
+  const head = ['מזהה מבנה', ...COLS_CORE.map(c => c[0]), ...ex, ...COLS_TAIL.map(c => c[0])];
   const lines = [head.map(csvCell).join(',')];
-  recs.forEach(r => lines.push([...COLS_CORE.map(c => c[1](r)), ...ex.map(k => (r.extra || {})[k] || ''), ...COLS_TAIL.map(c => c[1](r))].map(csvCell).join(',')));
+  recs.forEach(r => lines.push([r.site ? `${r.num} - ${r.site}` : r.num, ...COLS_CORE.map(c => c[1](r)), ...ex.map(k => (r.extra || {})[k] || ''), ...COLS_TAIL.map(c => c[1](r))].map(csvCell).join(',')));
   return new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
 }
 function pdfFileName(r) {
-  return safeName(`מבנה ${r.id}${r.site ? ' - ' + r.site : ''}`) + '.pdf';
+  return safeName(`מבנה ${r.num}${r.site ? ' - ' + r.site : ''}`) + '.pdf';
 }
 
 /* ============ יצירת המסמך / PDF ============ */
@@ -240,7 +245,7 @@ function field(v, cls = '') { return `<span class="f ${cls}">${esc(v) || '&nbsp;
 function docHtml(r) {
   const f = r.fields;
   const tok = {
-    id: field(r.id), site: field(r.site, 'w'), community: field(r.community, 'w'),
+    id: field(r.num), site: field(r.site, 'w'), community: field(r.community, 'w'),
     electric: field(f.electric, 'w'), water: field(f.water, 'w'),
     keysFront: field(f.keysFront, 's'), keysBack: field(f.keysBack, 's'), acSigns: field(f.acSigns, 's'),
   };
@@ -368,17 +373,17 @@ function renderList() {
   const list = recs.filter(r =>
     (!S.filter.site || r.site === S.filter.site) &&
     (S.filter.st === 'all' || (S.filter.st === 'signed') === isSigned(r)) &&
-    (!q || norm(r.id + r.site + r.community).includes(q)));
+    (!q || norm(r.num + r.site + r.community).includes(q)));
   $('#list').innerHTML = list.map(r => {
     const k = statusKey(r);
-    return `<a class="row-item" href="#/b/${encodeURIComponent(r.id)}"><div class="num">${esc(r.id)}</div><div class="meta"><b>${esc(r.site) || '—'}</b><span>${esc(r.community)}</span></div><span class="chip ${k}">${statusLabel(r)}</span></a>`;
+    return `<a class="row-item" href="#/b/${encodeURIComponent(r.id)}"><div class="num">${esc(r.num)}</div><div class="meta"><b>${esc(r.site) || '—'}</b><span>${esc(r.community)}</span></div><span class="chip ${k}">${statusLabel(r)}</span></a>`;
   }).join('');
   $('#empty').hidden = total > 0;
 }
 
 function renderForm(rec) {
   S.cur = rec;
-  $('#title').textContent = `מבנה ${rec.id}${rec.site ? ' · ' + rec.site : ''}`;
+  $('#title').textContent = `מבנה ${rec.num}${rec.site ? ' · ' + rec.site : ''}`;
   const locked = isSigned(rec);
   const dis = locked ? 'disabled' : '';
   const root = $('#v-form');
@@ -386,8 +391,8 @@ function renderForm(rec) {
     ${locked ? `<div class="banner">✔ נחתם ב-${fmtDate(rec.signedAt)}</div>` : ''}
     <div class="card"><h2>פרטי המבנה</h2>
       <div class="grid2">
-        <div class="fld"><label>מספר מבנה</label><input value="${esc(rec.id)}" disabled></div>
-        <div class="fld"><label>ישוב / שם אתר</label><input data-k="site" value="${esc(rec.site)}" ${dis}></div>
+        <div class="fld"><label>מספר מבנה</label><input value="${esc(rec.num)}" disabled></div>
+        <div class="fld"><label>ישוב / שם אתר</label><input value="${esc(rec.site)}" disabled></div>
       </div>
       <div class="fld"><label>קהילה</label><input data-k="community" value="${esc(rec.community)}" ${dis}></div>
     </div>
@@ -503,7 +508,8 @@ async function exportZip() {
 async function importBackup(buf) {
   const data = JSON.parse(new TextDecoder().decode(buf));
   if (!Array.isArray(data.buildings)) throw new Error('קובץ גיבוי לא תקין');
-  const recs = data.buildings.map(b => Object.assign(blankRec(b.id), b, { pdf: null }));
+  const recs = data.buildings.map(b => Object.assign(blankRec(b.num ?? b.id, b.site || ''), b, { pdf: null }));
+  recs.forEach(r => { r.num = String(r.num ?? r.id); r.id = mkKey(r.num, r.site); });
   await DB.putMany(recs); recs.forEach(r => S.map.set(r.id, r));
   return `שוחזרו ${recs.length} מבנים מהגיבוי (קובצי ה-PDF ייווצרו מחדש בעת הייצוא).`;
 }
@@ -564,7 +570,13 @@ async function init() {
   net(); addEventListener('online', net); addEventListener('offline', net);
   await DB.open();
   applyConfig(await DB.getCfg());
-  (await DB.all()).forEach(r => { fillSigners(r); S.map.set(r.id, r); });
+  for (const r of await DB.all()) {
+    fillSigners(r);
+    if (r.num === undefined) { /* הגירה מגרסה ישנה: המזהה היה מספר מבנה בלבד */
+      await DB.del(r.id); r.num = String(r.id); r.id = mkKey(r.num, r.site); await DB.put(r);
+    }
+    S.map.set(r.id, r);
+  }
   wire(); route();
   navigator.storage?.persist?.();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').then(() => renderExport()).catch(() => {});

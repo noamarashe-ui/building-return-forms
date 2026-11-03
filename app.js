@@ -1,6 +1,6 @@
 'use strict';
 /* ============ הגדרות ============ */
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.1';
 const ZIP_CHUNK = 60; // כמה PDF בכל קובץ ZIP
 const QFIELDS = [
   { key: 'electric', label: 'רישום שעון חשמל', mode: 'decimal' },
@@ -476,8 +476,8 @@ function renderExport() {
   $('#cfgState').textContent = !CFG_CUSTOM ? 'כרגע: ברירת מחדל גנרית (ללא לוגו)' : 'כרגע: ' + CFG.docTitle + (CFG.logo ? ' · עם לוגו' : '');
   $('#expStats').textContent = `${recs.length} מבנים · ${signed.length} חתומים · ${signed.filter(r => !r.exportedAt).length} טרם יוצאו`;
   $('#swState').textContent = ('serviceWorker' in navigator && navigator.serviceWorker.controller)
-    ? '✔ האפליקציה שמורה במכשיר ועובדת גם בלי קליטה.'
-    : 'האפליקציה עדיין לא שמורה לעבודה אופליין – פתח אותה פעם אחת עם אינטרנט.';
+    ? '✔ האפליקציה שמורה במכשיר ועובדת גם בלי קליטה. גרסה ' + APP_VERSION
+    : 'האפליקציה עדיין לא שמורה לעבודה אופליין – פתח אותה פעם אחת עם אינטרנט. גרסה ' + APP_VERSION;
   navigator.storage?.persisted?.().then(p => { $('#persistState').textContent = p ? 'אחסון קבוע: מופעל' : 'אחסון קבוע: לא הופעל (מומלץ לייצא גיבוי מדי פעם)'; });
 }
 function note(el, msg) { el.textContent = msg; el.hidden = false; }

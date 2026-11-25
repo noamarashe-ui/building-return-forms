@@ -140,4 +140,19 @@ public class FormsFilesPlugin extends Plugin {
             call.reject("send failed: " + e.getMessage());
         }
     }
+
+    /** Opens a saved file in an installed viewer (e.g. a PDF reader). */
+    @PluginMethod
+    public void viewFile(PluginCall call) {
+        try {
+            Uri uri = Uri.parse(call.getString("uri", ""));
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(uri, call.getString("type", "application/pdf"));
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            getActivity().startActivity(Intent.createChooser(intent, "פתח"));
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("view failed: " + e.getMessage());
+        }
+    }
 }

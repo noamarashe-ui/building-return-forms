@@ -5,14 +5,15 @@ window.addEventListener('error', e => {
   try { document.body.insertAdjacentHTML('afterbegin', '<p style="padding:10px;margin:0;color:#c0392b;background:#fff;font:14px sans-serif">שגיאה: ' + String(e.message).replace(/</g, '&lt;') + '</p>'); } catch (_) { /* ignore */ }
 });
 /* ============ הגדרות ============ */
-const APP_VERSION = '1.4.4';
+const APP_VERSION = '1.5.0';
 const NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 /* ב-WebView של Capacitor ללא bundler אין registerPlugin; קוראים לתוסף דרך nativePromise */
 const Native = NATIVE ? {
   saveFile: o => window.Capacitor.nativePromise('FormsFiles', 'saveFile', o),
   sendEmail: o => window.Capacitor.nativePromise('FormsFiles', 'sendEmail', o),
+  viewFile: o => window.Capacitor.nativePromise('FormsFiles', 'viewFile', o),
 } : null;
-const ZIP_CHUNK = NATIVE ? 25 : 60; // כמה PDF בכל קובץ ZIP
+const ZIP_CHUNK = NATIVE ? 40 : 60; // כמה PDF בכל קובץ ZIP
 const MAIL_CHUNK = 20; // כמה קבצים מצורפים בכל מייל
 const QFIELDS = [
   { key: 'electric', label: 'רישום שעון חשמל', mode: 'decimal' },
@@ -170,7 +171,7 @@ function blankRec(num, site = '') {
   };
 }
 function fillSigners(r) { SIGNERS.forEach(s => { if (!r.signers[s.key]) r.signers[s.key] = { name: '', sig: '' }; }); }
-const isSigned = r => !!r.signedAt && !!r.pdf;
+const isSigned = r => !!r.signedAt;
 function hasData(r) {
   return Object.values(r.fields).some(v => v) || SIGNERS.some(s => r.signers[s.key].sig);
 }
@@ -430,10 +431,10 @@ function signModal(title) {
 
 /* ============ תצוגות ============ */
 function show(view) {
-  ['list', 'form', 'export'].forEach(v => ($('#v-' + v).hidden = v !== view));
+  ['list', 'form', 'export', 'files'].forEach(v => ($('#v-' + v).hidden = v !== view));
   $('#backBtn').hidden = view !== 'form';
-  $$('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === (view === 'export' ? 'export' : 'list')));
-  if (view !== 'form') $('#title').textContent = view === 'export' ? 'ייבוא / ייצוא' : CFG.appTitle;
+  $$('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === (view === 'export' ? 'export' : view === 'files' ? 'files' : 'list')));
+  if (view !== 'form') $('#title').textContent = view === 'export' ? 'ייבוא / ייצוא' : view === 'files' ? 'קבצי PDF חתומים' : CFG.appTitle;
   window.scrollTo(0, 0);
 }
 function route() {
@@ -441,6 +442,7 @@ function route() {
   let m;
   if ((m = h.match(/^#\/b\/(.+)$/)) && S.map.has(m[1])) { renderForm(S.map.get(m[1])); show('form'); }
   else if (h === '#/x') { renderExport(); show('export'); }
+  else if (h === '#/f') { renderFiles(); show('files'); }
   else { renderList(); show('list'); }
 }
 
@@ -512,8 +514,8 @@ function renderForm(rec) {
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (act === 'finish') finishFlow(rec);
     else if (act === 'dl') {
-      if (NATIVE) savePdfToFolder(rec).then(r => toast('נשמר ב-' + r.path, 5000)).catch(e => toast('שגיאה בשמירה: ' + (e.message || e), 6000));
-      else download(rec.pdf, rec.pdfName);
+      if (NATIVE) ensurePdf(rec).then(() => savePdfToFolder(rec)).then(r => toast('נשמר ב-' + r.path, 5000)).catch(e => toast('שגיאה בשמירה: ' + (e.message || e), 6000));
+      else ensurePdf(rec).then(() => download(rec.pdf, rec.pdfName));
     }
     else if (act === 'share') shareFlow(rec);
     else if (act === 'reopen') {
@@ -554,8 +556,12 @@ async function finishFlow(rec) {
     }
   });
 }
-async function autoBackup() {
+let lastBackup = 0, backupDirty = false;
+async function autoBackup(force) {
   if (!NATIVE) return;
+  backupDirty = true;
+  if (!force && Date.now() - lastBackup < 5 * 60 * 1000) return; /* עד פעם ב-5 דקות כדי לא להכביד כשיש מאות טפסים */
+  lastBackup = Date.now(); backupDirty = false;
   try {
     const data = { version: APP_VERSION, exportedAt: new Date().toISOString(), buildings: sortedRecs().map(r => ({ ...r, pdf: null })) };
     await nativeSave(new Blob([JSON.stringify(data)], { type: 'application/json' }), 'backup-latest.json', 'Backup');
@@ -568,6 +574,7 @@ async function savePdfToFolder(rec) {
   return r;
 }
 async function shareFlow(rec) {
+  await ensurePdf(rec);
   if (NATIVE) {
     try {
       const r = await savePdfToFolder(rec);
@@ -596,6 +603,85 @@ function renderExport() {
   navigator.storage?.persisted?.().then(p => { $('#persistState').textContent = p ? 'אחסון קבוע: מופעל' : 'אחסון קבוע: לא הופעל (מומלץ לייצא גיבוי מדי פעם)'; });
 }
 function note(el, msg) { el.textContent = msg; el.hidden = false; }
+
+/* ============ קבצי PDF חתומים: צפייה, בחירה והורדה ============ */
+S.sel = new Set(); S.fq = ''; S.fsite = '';
+function filesFiltered() {
+  const q = norm(S.fq);
+  return sortedRecs().filter(isSigned).filter(r => (!S.fsite || r.site === S.fsite) && (!q || norm(r.num + r.site + r.community + (r.signers.s1 ? '' : '')).includes(q)));
+}
+function renderFiles() {
+  const all = sortedRecs().filter(isSigned);
+  const sites = [...new Set(all.map(r => r.site).filter(Boolean))].sort(natCmp);
+  const sel = $('#fSite');
+  sel.innerHTML = '<option value="">כל האתרים</option>' + sites.map(x => `<option ${x === S.fsite ? 'selected' : ''} value="${esc(x)}">${esc(x)}</option>`).join('');
+  const list = filesFiltered();
+  S.sel.forEach(id => { if (!S.map.has(id) || !isSigned(S.map.get(id))) S.sel.delete(id); });
+  $('#fList').innerHTML = list.map(r => `<div class="frow"><label class="fchk"><input type="checkbox" data-id="${esc(r.id)}" ${S.sel.has(r.id) ? 'checked' : ''}><div class="meta"><b>מבנה ${esc(r.num)}${r.site ? ' · ' + esc(r.site) : ''}</b><span>${fmtDate(r.signedAt)}${r.exportedAt ? ' · יוצא' : ''}${r.emailedAt ? ' · נשלח' : ''}${r.pdf ? ' · ' + Math.round(r.pdf.size / 1024) + 'KB' : ''}</span></div></label><button class="btn small" data-open="${esc(r.id)}">פתח</button><button class="btn small" data-dl="${esc(r.id)}">${NATIVE ? 'שמור' : 'הורד'}</button></div>`).join('');
+  $('#fEmpty').hidden = list.length > 0;
+  $('#fEmpty').textContent = all.length ? 'לא נמצאו קבצים לפי הסינון.' : 'עדיין אין טפסים חתומים.';
+  updateFilesBar(list);
+}
+function updateFilesBar(list = filesFiltered()) {
+  const n = S.sel.size;
+  $('#fCount').textContent = `${list.length} קבצים · ${n} נבחרו`;
+  ['#fZip', '#fShare', '#fNone'].forEach(id => ($(id).disabled = !n));
+  $('#fAll').textContent = list.length && list.every(r => S.sel.has(r.id)) ? 'בטל סימון הכל' : 'סמן הכל (' + list.length + ')';
+}
+async function openRecPdf(rec) {
+  await ensurePdf(rec);
+  if (NATIVE) {
+    const r = await savePdfToFolder(rec);
+    await Native.viewFile({ uri: r.uri, type: 'application/pdf' });
+  } else {
+    const u = URL.createObjectURL(rec.pdf); window.open(u, '_blank'); setTimeout(() => URL.revokeObjectURL(u), 60000);
+  }
+}
+function wireFiles() {
+  $('#fQ').addEventListener('input', e => { S.fq = e.target.value; renderFiles(); });
+  $('#fSite').addEventListener('change', e => { S.fsite = e.target.value; renderFiles(); });
+  $('#fAll').addEventListener('click', () => {
+    const list = filesFiltered(), allOn = list.length && list.every(r => S.sel.has(r.id));
+    list.forEach(r => (allOn ? S.sel.delete(r.id) : S.sel.add(r.id))); renderFiles();
+  });
+  $('#fNone').addEventListener('click', () => { S.sel.clear(); renderFiles(); });
+  $('#fList').addEventListener('change', e => {
+    const id = e.target.dataset.id; if (!id) return;
+    e.target.checked ? S.sel.add(id) : S.sel.delete(id); updateFilesBar();
+  });
+  $('#fList').addEventListener('click', async e => {
+    const o = e.target.closest('[data-open]'), d = e.target.closest('[data-dl]');
+    try {
+      if (o) await openRecPdf(S.map.get(o.dataset.open));
+      else if (d) {
+        const rec = S.map.get(d.dataset.dl); await ensurePdf(rec);
+        if (NATIVE) { const r = await savePdfToFolder(rec); toast('נשמר ב-' + r.path, 5000); } else download(rec.pdf, rec.pdfName);
+      }
+    } catch (err) { toast('שגיאה: ' + (err.message || err), 5000); }
+  });
+  $('#fZip').addEventListener('click', async () => {
+    const recs = sortedRecs().filter(r => S.sel.has(r.id)); if (!recs.length) return;
+    const m = $('#fMsg'); m.hidden = false;
+    try { await exportRecs(recs, m); } catch (err) { note(m, 'שגיאה: ' + err.message); }
+    renderFiles();
+  });
+  $('#fShare').addEventListener('click', async () => {
+    const recs = sortedRecs().filter(r => S.sel.has(r.id)); if (!recs.length) return;
+    const m = $('#fMsg'), parts = Math.ceil(recs.length / MAIL_CHUNK);
+    try {
+      for (let p = 0; p < parts; p++) {
+        const chunk = recs.slice(p * MAIL_CHUNK, (p + 1) * MAIL_CHUNK);
+        if (NATIVE) {
+          const uris = [];
+          for (let i = 0; i < chunk.length; i++) { note(m, `מכין ${i + 1}/${chunk.length}…`); await ensurePdf(chunk[i]); uris.push((await savePdfToFolder(chunk[i])).uri); }
+          m.hidden = true;
+          await Native.sendEmail({ to: [], uris, subject: `${CFG.docTitle} (${p + 1}/${parts})`, body: chunk.map(r => `• מבנה ${r.num}${r.site ? ' - ' + r.site : ''}`).join('\n'), title: 'שיתוף קבצים', type: 'application/pdf' });
+          if (p + 1 < parts && !(await ask(`נשלחו ${p + 1}/${parts}. להמשיך לקבוצה הבאה?`, [{ t: 'עצור', v: false }, { t: 'המשך', v: true, cls: 'primary' }]))) break;
+        } else { await exportRecs(chunk, m); break; }
+      }
+    } catch (err) { note(m, 'שגיאה: ' + (err.message || err)); }
+  });
+}
 
 /* ============ נמענים ושליחה במייל ============ */
 function recipientsFor(site) {
@@ -659,6 +745,9 @@ async function exportZip() {
   if ($('#onlyNew').checked) recs = recs.filter(r => !r.exportedAt);
   const msg = $('#expMsg');
   if (!recs.length) return note(msg, 'אין קבצים חתומים לייצוא.');
+  return exportRecs(recs, msg);
+}
+async function exportRecs(recs, msg) {
   const stamp = today(), parts = Math.ceil(recs.length / ZIP_CHUNK);
   for (let p = 0; p < parts; p++) {
     const chunk = recs.slice(p * ZIP_CHUNK, (p + 1) * ZIP_CHUNK);
@@ -676,7 +765,7 @@ async function exportZip() {
     await new Promise(r => setTimeout(r, 700));
   }
   note(msg, `יוצאו ${recs.length} קבצי PDF.`);
-  renderExport();
+  if (!$('#v-export').hidden) renderExport();
 }
 async function importBackup(buf) {
   const data = JSON.parse(new TextDecoder().decode(buf));
@@ -685,12 +774,7 @@ async function importBackup(buf) {
   recs.forEach(r => { r.num = String(r.num ?? r.id); r.id = mkKey(r.num, r.site); });
   await DB.putMany(recs); recs.forEach(r => S.map.set(r.id, r));
   const signed = recs.filter(r => r.signedAt);
-  let n = 0;
-  for (const r of signed) {
-    note($('#impMsg'), `משחזר קבצי PDF: ${++n}/${signed.length}`);
-    try { await ensurePdf(r); } catch (_) { /* ייווצר מחדש בפתיחה לעריכה */ }
-  }
-  return `שוחזרו ${recs.length} מבנים מהגיבוי, מתוכם ${signed.length} חתומים (קובצי ה-PDF נוצרו מחדש).`;
+  return `שוחזרו ${recs.length} מבנים מהגיבוי, מתוכם ${signed.length} חתומים (קובצי ה-PDF ייווצרו מחדש בעת הצורך).`;
 }
 
 function wire() {
@@ -700,10 +784,10 @@ function wire() {
     const b = e.target.closest('button'); if (!b) return;
     S.filter.st = b.dataset.s; $$('#statSeg button').forEach(x => x.classList.toggle('on', x === b)); renderList();
   });
-  $$('.tabs button').forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.tab === 'export' ? '#/x' : '#/'; }));
+  $$('.tabs button').forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.tab === 'export' ? '#/x' : b.dataset.tab === 'files' ? '#/f' : '#/'; }));
   $('#backBtn').addEventListener('click', () => { location.hash = '#/'; });
   window.addEventListener('hashchange', route);
-  document.addEventListener('visibilitychange', () => { if (document.hidden && S.cur) saveNow(S.cur).catch(() => {}); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { if (S.cur) saveNow(S.cur).catch(() => {}); if (backupDirty) autoBackup(true); } });
 
   /* כפתורי בחירת קובץ: לחיצה תכנותית על ה-input (עובד גם ב-WebView של אנדרואיד). באנדרואיד ללא סינון סוגים כדי שכל הקבצים יוצגו */
   if (NATIVE) $$('input[type=file]').forEach(i => i.removeAttribute('accept'));
@@ -780,7 +864,7 @@ async function init() {
     }
     S.map.set(r.id, r);
   }
-  wire(); route();
+  wire(); wireFiles(); route();
   navigator.storage?.persist?.();
   if (!NATIVE && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').then(() => renderExport()).catch(() => {});
 }

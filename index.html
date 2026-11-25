@@ -35,6 +35,27 @@
 
   <section id="v-form" hidden></section>
 
+  <section id="v-files" hidden>
+    <div class="filters">
+      <input id="fQ" type="search" placeholder="חיפוש: מספר מבנה / אתר / קהילה" autocomplete="off">
+      <select id="fSite" aria-label="סינון לפי אתר"></select>
+    </div>
+    <div class="fbar">
+      <span id="fCount" class="hint"></span>
+      <div class="row">
+        <button class="btn small" id="fAll" type="button">סמן הכל</button>
+        <button class="btn small" id="fNone" type="button" disabled>נקה</button>
+      </div>
+      <div class="row">
+        <button class="btn primary" id="fZip" type="button" disabled>הורד נבחרים (ZIP)</button>
+        <button class="btn" id="fShare" type="button" disabled>שלח / שתף נבחרים</button>
+      </div>
+      <div id="fMsg" class="note" hidden></div>
+    </div>
+    <div id="fList"></div>
+    <div id="fEmpty" class="empty" hidden></div>
+  </section>
+
   <section id="v-export" hidden>
     <div class="card">
       <h2>ייבוא מבנים</h2>
@@ -102,6 +123,7 @@
 
 <nav class="tabs">
   <button data-tab="list" class="on">מבנים</button>
+  <button data-tab="files">קבצים</button>
   <button data-tab="export">ייבוא / ייצוא</button>
 </nav>
 

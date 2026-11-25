@@ -100,3 +100,11 @@ canvas.pad{display:block;width:100%;height:min(46vh,300px);touch-action:none;cur
 .rcform{display:grid;gap:8px;margin-top:8px}
 .banner small{font-weight:400}
 .offscreen{position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none}
+
+.fbar{position:sticky;top:calc(56px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));background:var(--bg,#f4f7fa);padding:8px 0;z-index:5;display:flex;flex-direction:column;gap:8px}
+.frow{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:8px 10px;margin-bottom:8px}
+.fchk{flex:1;display:flex;align-items:center;gap:12px;min-width:0}
+.fchk input{width:24px;height:24px;flex:none}
+.fchk .meta{display:flex;flex-direction:column;min-width:0}
+.fchk .meta span{color:var(--mut);font-size:13px}
+#v-files{padding-bottom:90px}

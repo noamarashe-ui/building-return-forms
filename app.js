@@ -1,6 +1,6 @@
 'use strict';
 /* ============ הגדרות ============ */
-const APP_VERSION = '1.2.1';
+const APP_VERSION = '1.3.0';
 const ZIP_CHUNK = 60; // כמה PDF בכל קובץ ZIP
 const QFIELDS = [
   { key: 'electric', label: 'רישום שעון חשמל', mode: 'decimal' },
@@ -58,6 +58,10 @@ const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const norm = h => String(h ?? '').replace(/[^א-תa-zA-Z0-9]/g, '');
 const pad2 = n => String(n).padStart(2, '0');
+function fmtDay(iso) {
+  const d = new Date(iso);
+  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
+}
 function fmtDate(iso) {
   const d = new Date(iso);
   return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
@@ -242,8 +246,9 @@ function pdfFileName(r) {
 
 /* ============ יצירת המסמך / PDF ============ */
 function field(v, cls = '') { return `<span class="f ${cls}">${esc(v) || '&nbsp;'}</span>`; }
-function docHtml(r) {
+function docHtml(r, iso) {
   const f = r.fields;
+  const when = iso || r.signedAt || new Date().toISOString();
   const tok = {
     id: field(r.num), site: field(r.site, 'w'), community: field(r.community, 'w'),
     electric: field(f.electric, 'w'), water: field(f.water, 'w'),
@@ -263,13 +268,14 @@ function docHtml(r) {
     ${CFG.items.map((t, i) => `<div class="li">${i + 1}. ${esc(t)}</div>`).join('')}
     ${CFG.formHeading ? `<div class="sub">${esc(CFG.formHeading)}</div>` : ''}
     ${CFG.paragraphs.map(para).join('')}
+    <p class="line datel">תאריך: ${field(fmtDay(when), 'w')}</p>
     <div class="sigs">${SIGNERS.map(s => { const g = r.signers[s.key] || { name: '', sig: '' }; return `<div class="sg"><div class="box">${g.sig ? `<img src="${g.sig}" alt="">` : ''}</div><div class="role">${esc(s.label)}</div><div class="nm">${esc(g.name)}</div></div>`; }).join('')}</div>
   </div>`;
 }
-async function renderDocCanvas(rec) {
+async function renderDocCanvas(rec, iso) {
   await Promise.all([document.fonts.load('400 15px Heebo', 'אבג abc'), document.fonts.load('700 15px Heebo', 'אבג abc')]);
   const st = $('#doc-stage');
-  st.innerHTML = docHtml(rec);
+  st.innerHTML = docHtml(rec, iso);
   await Promise.all([...st.querySelectorAll('img')].map(i => (i.complete ? 1 : new Promise(r => { i.onload = i.onerror = r; }))));
   await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
   const cv = await html2canvas(st.firstElementChild, { scale: 2, backgroundColor: '#ffffff', logging: false, useCORS: true, scrollX: 0, scrollY: 0, windowWidth: 794 });
@@ -285,7 +291,7 @@ function canvasToPdf(cv, title) {
 }
 async function ensurePdf(rec) {
   if (rec.pdf) return rec.pdf;
-  const cv = await renderDocCanvas(rec);
+  const cv = await renderDocCanvas(rec, rec.signedAt);
   rec.pdfName = pdfFileName(rec);
   rec.pdf = canvasToPdf(cv, rec.pdfName);
   await saveNow(rec);
@@ -445,8 +451,9 @@ async function finishFlow(rec) {
     if (!go) return;
   }
   const wait = modal('<p class="msg">מכין תצוגה מקדימה…</p>');
+  const signIso = new Date().toISOString(); /* תאריך החתימה מתועד פעם אחת ומשמש גם לתצוגה וגם ל-PDF */
   let cv;
-  try { cv = await renderDocCanvas(rec); } catch (err) { wait.close(); return toast('שגיאה ביצירת המסמך: ' + err.message, 5000); }
+  try { cv = await renderDocCanvas(rec, signIso); } catch (err) { wait.close(); return toast('שגיאה ביצירת המסמך: ' + err.message, 5000); }
   wait.close();
   const m = modal(`<h3>תצוגה מקדימה</h3><img class="prev" src="${cv.toDataURL('image/jpeg', 0.7)}" alt="תצוגה מקדימה"><div class="row" style="margin-top:12px"><button class="btn" data-a="back">חזרה לעריכה</button><button class="btn primary" data-a="ok">אשר וצור PDF</button></div>`);
   m.el.addEventListener('click', async e => {
@@ -456,7 +463,7 @@ async function finishFlow(rec) {
       m.close();
       rec.pdfName = pdfFileName(rec);
       rec.pdf = canvasToPdf(cv, rec.pdfName);
-      rec.signedAt = new Date().toISOString();
+      rec.signedAt = signIso;
       rec.exportedAt = '';
       await saveNow(rec);
       toast('ה-PDF נשמר במכשיר');

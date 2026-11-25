@@ -5,7 +5,7 @@ window.addEventListener('error', e => {
   try { document.body.insertAdjacentHTML('afterbegin', '<p style="padding:10px;margin:0;color:#c0392b;background:#fff;font:14px sans-serif">שגיאה: ' + String(e.message).replace(/</g, '&lt;') + '</p>'); } catch (_) { /* ignore */ }
 });
 /* ============ הגדרות ============ */
-const APP_VERSION = '1.4.3';
+const APP_VERSION = '1.4.4';
 const NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 /* ב-WebView של Capacitor ללא bundler אין registerPlugin; קוראים לתוסף דרך nativePromise */
 const Native = NATIVE ? {
@@ -94,12 +94,13 @@ async function nativeSave(blob, name, sub = '') {
 /* באנדרואיד: שומר לתיקיית Documents/<folder>/Exports. בדפדפן: הורדה רגילה */
 function download(blob, name, sub = 'Exports') {
   if (NATIVE) {
-    return nativeSave(blob, name, sub).then(r => toast('נשמר ב-' + r.path, 5000)).catch(e => toast('שגיאה בשמירה: ' + (e.message || e), 6000));
+    return nativeSave(blob, name, sub).then(r => { toast('נשמר ב-' + r.path, 5000); return true; }).catch(e => { toast('שגיאה בשמירה: ' + (e.message || e), 6000); return false; });
   }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = name;
   document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 5000);
+  return Promise.resolve(true);
 }
 function modal(html) {
   const wrap = document.createElement('div');
@@ -517,7 +518,7 @@ function renderForm(rec) {
     else if (act === 'share') shareFlow(rec);
     else if (act === 'reopen') {
       const ok = await ask('לפתוח את הטופס לעריכה? קובץ ה-PDF הקיים יימחק ויווצר מחדש בסיום.', [{ t: 'ביטול', v: false }, { t: 'פתח לעריכה', v: true, cls: 'danger' }]);
-      if (ok) { rec.pdf = null; rec.signedAt = ''; rec.exportedAt = ''; await saveNow(rec); renderForm(rec); }
+      if (ok) { rec.pdf = null; rec.signedAt = ''; rec.exportedAt = ''; rec.emailedAt = ''; await saveNow(rec); renderForm(rec); }
     }
   };
 }
@@ -549,8 +550,16 @@ async function finishFlow(rec) {
         catch (e) { toast('ה-PDF נשמר באפליקציה, אך השמירה לתיקייה נכשלה: ' + (e.message || e), 7000); }
       } else toast('ה-PDF נשמר במכשיר');
       renderForm(rec);
+      autoBackup();
     }
   });
+}
+async function autoBackup() {
+  if (!NATIVE) return;
+  try {
+    const data = { version: APP_VERSION, exportedAt: new Date().toISOString(), buildings: sortedRecs().map(r => ({ ...r, pdf: null })) };
+    await nativeSave(new Blob([JSON.stringify(data)], { type: 'application/json' }), 'backup-latest.json', 'Backup');
+  } catch (_) { /* גיבוי אוטומטי הוא בונוס – לא מפריע לעבודה */ }
 }
 async function savePdfToFolder(rec) {
   const r = await nativeSave(rec.pdf, rec.pdfName, '');
@@ -660,7 +669,8 @@ async function exportZip() {
     }
     zip.file('summary.csv', buildCsv(chunk));
     const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
-    download(blob, `signed-forms-${stamp}${parts > 1 ? `-part${p + 1}` : ''}.zip`);
+    const saved = await download(blob, `signed-forms-${stamp}${parts > 1 ? `-part${p + 1}` : ''}.zip`);
+    if (!saved) return note(msg, `הייצוא נכשל בחלק ${p + 1}/${parts} – לא סומן כיוצא. נסה שוב.`);
     chunk.forEach(r => (r.exportedAt = new Date().toISOString()));
     await DB.putMany(chunk);
     await new Promise(r => setTimeout(r, 700));
@@ -674,7 +684,13 @@ async function importBackup(buf) {
   const recs = data.buildings.map(b => Object.assign(blankRec(b.num ?? b.id, b.site || ''), b, { pdf: null }));
   recs.forEach(r => { r.num = String(r.num ?? r.id); r.id = mkKey(r.num, r.site); });
   await DB.putMany(recs); recs.forEach(r => S.map.set(r.id, r));
-  return `שוחזרו ${recs.length} מבנים מהגיבוי (קובצי ה-PDF ייווצרו מחדש בעת הייצוא).`;
+  const signed = recs.filter(r => r.signedAt);
+  let n = 0;
+  for (const r of signed) {
+    note($('#impMsg'), `משחזר קבצי PDF: ${++n}/${signed.length}`);
+    try { await ensurePdf(r); } catch (_) { /* ייווצר מחדש בפתיחה לעריכה */ }
+  }
+  return `שוחזרו ${recs.length} מבנים מהגיבוי, מתוכם ${signed.length} חתומים (קובצי ה-PDF נוצרו מחדש).`;
 }
 
 function wire() {

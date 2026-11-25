@@ -1,8 +1,17 @@
 'use strict';
+/* אם משהו קורס בטעינה, מציגים את השגיאה על המסך במקום להשאיר אפליקציה "תקועה" */
+window.addEventListener('error', e => {
+  if (window.__shownErr) return; window.__shownErr = true;
+  try { document.body.insertAdjacentHTML('afterbegin', '<p style="padding:10px;margin:0;color:#c0392b;background:#fff;font:14px sans-serif">שגיאה: ' + String(e.message).replace(/</g, '&lt;') + '</p>'); } catch (_) { /* ignore */ }
+});
 /* ============ הגדרות ============ */
-const APP_VERSION = '1.4.1';
+const APP_VERSION = '1.4.2';
 const NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-const Native = NATIVE ? window.Capacitor.registerPlugin('FormsFiles') : null;
+/* ב-WebView של Capacitor ללא bundler אין registerPlugin; קוראים לתוסף דרך nativePromise */
+const Native = NATIVE ? {
+  saveFile: o => window.Capacitor.nativePromise('FormsFiles', 'saveFile', o),
+  sendEmail: o => window.Capacitor.nativePromise('FormsFiles', 'sendEmail', o),
+} : null;
 const ZIP_CHUNK = NATIVE ? 25 : 60; // כמה PDF בכל קובץ ZIP
 const MAIL_CHUNK = 20; // כמה קבצים מצורפים בכל מייל
 const QFIELDS = [

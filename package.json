@@ -1,0 +1,17 @@
+{
+  "name": "field-forms",
+  "version": "1.4.0",
+  "private": true,
+  "description": "Offline field signature forms (web app + Android wrapper)",
+  "scripts": {
+    "prepare-www": "node scripts/prepare-www.mjs",
+    "sync": "npm run prepare-www && cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.3",
+    "@capacitor/core": "^8.6.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.3"
+  }
+}

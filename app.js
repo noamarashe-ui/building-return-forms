@@ -1,7 +1,10 @@
 'use strict';
 /* ============ הגדרות ============ */
-const APP_VERSION = '1.3.0';
-const ZIP_CHUNK = 60; // כמה PDF בכל קובץ ZIP
+const APP_VERSION = '1.4.0';
+const NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+const Native = NATIVE ? window.Capacitor.registerPlugin('FormsFiles') : null;
+const ZIP_CHUNK = NATIVE ? 25 : 60; // כמה PDF בכל קובץ ZIP
+const MAIL_CHUNK = 20; // כמה קבצים מצורפים בכל מייל
 const QFIELDS = [
   { key: 'electric', label: 'רישום שעון חשמל', mode: 'decimal' },
   { key: 'water', label: 'רישום מונה המים', mode: 'decimal' },
@@ -12,6 +15,7 @@ const QFIELDS = [
 /* הגדרת ברירת מחדל גנרית. הנוסח, הלוגו ושמות החותמים האמיתיים נטענים מקובץ הגדרות נפרד (לא נשמר בקוד) */
 const DEFAULT_CONFIG = {
   appTitle: 'טפסי חתימה בשטח',
+  folder: 'FieldForms', /* שם התיקייה ב-Documents באנדרואיד */
   docTitle: 'טופס השבת מבנה',
   intro: '',
   items: [],
@@ -49,6 +53,7 @@ function applyConfig(cfg) {
 const COLS_TAIL = [
   ['סטטוס', r => statusLabel(r)],
   ['תאריך חתימה', r => (r.signedAt ? fmtDate(r.signedAt) : '')],
+  ['נשלח במייל', r => (r.emailedAt ? fmtDate(r.emailedAt) : '')],
   ['קובץ PDF', r => r.pdfName || ''],
 ];
 
@@ -72,7 +77,16 @@ function toast(msg, ms = 2600) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('on');
   clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('on'), ms);
 }
-function download(blob, name) {
+const blobToB64 = blob => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] || ''); r.onerror = () => rej(r.error); r.readAsDataURL(blob); });
+const folderName = () => CFG.folder || 'FieldForms';
+async function nativeSave(blob, name, sub = '') {
+  return Native.saveFile({ folder: folderName() + (sub ? '/' + sub : ''), name, mime: blob.type || 'application/octet-stream', data: await blobToB64(blob) });
+}
+/* באנדרואיד: שומר לתיקיית Documents/<folder>/Exports. בדפדפן: הורדה רגילה */
+function download(blob, name, sub = 'Exports') {
+  if (NATIVE) {
+    return nativeSave(blob, name, sub).then(r => toast('נשמר ב-' + r.path, 5000)).catch(e => toast('שגיאה בשמירה: ' + (e.message || e), 6000));
+  }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = name;
   document.body.appendChild(a); a.click();
@@ -126,12 +140,14 @@ const DB = {
   del(id) { return this.run('readwrite', s => s.delete(id)); },
   putMany(recs) { return this.run('readwrite', s => { recs.forEach(r => s.put(r)); }); },
   clear() { return this.run('readwrite', s => s.clear()); },
+  getMeta(k) { return new Promise((res, rej) => { const q = this.db.transaction('meta', 'readonly').objectStore('meta').get(k); q.onsuccess = () => res(q.result ?? null); q.onerror = () => rej(q.error); }); },
+  setMeta(k, v) { return new Promise((res, rej) => { const t = this.db.transaction('meta', 'readwrite'); t.objectStore('meta').put(v, k); t.oncomplete = res; t.onerror = () => rej(t.error); }); },
   getCfg() { return new Promise((res, rej) => { const q = this.db.transaction('meta', 'readonly').objectStore('meta').get('config'); q.onsuccess = () => res(q.result || null); q.onerror = () => rej(q.error); }); },
   setCfg(cfg) { return new Promise((res, rej) => { const t = this.db.transaction('meta', 'readwrite'); cfg ? t.objectStore('meta').put(cfg, 'config') : t.objectStore('meta').delete('config'); t.oncomplete = res; t.onerror = () => rej(t.error); }); },
 };
 
 /* ============ מודל נתונים ============ */
-const S = { map: new Map(), filter: { q: '', site: '', st: 'all' }, cur: null };
+const S = { map: new Map(), recipients: [], filter: { q: '', site: '', st: 'all' }, cur: null };
 /* מזהה ייחודי = מספר מבנה + שם אתר (מספר מבנה לבדו אינו ייחודי) */
 const cleanTxt = v => String(v ?? '').replace(/\s+/g, ' ').trim();
 const mkKey = (num, site) => `${num}|${site}`;
@@ -171,7 +187,7 @@ function buildAliases() {
     add('name:' + sg.key, ['שם ' + sg.label, sg.label]);
     add('sigcol', ['חתימת ' + sg.label, 'חתימה ' + sg.label]);
   });
-  add('sigcol', ['סטטוס', 'תאריך חתימה', 'קובץ PDF', 'מזהה מבנה']);
+  add('sigcol', ['סטטוס', 'תאריך חתימה', 'קובץ PDF', 'מזהה מבנה', 'נשלח במייל']);
   add('f:electric', ['רישום שעון חשמל', 'שעון חשמל']);
   add('f:water', ['רישום מונה המים', 'רישום מונה מים', 'מונה מים', 'מונה המים']);
   add('f:keysFront', ['מספר מפתחות קיימים לדלת קדמית', 'מפתחות דלת קדמית', 'מפתחות קדמית']);
@@ -181,7 +197,7 @@ function buildAliases() {
   return m;
 }
 
-function sheetRows(buf, name) {
+function workbookSheets(buf, name) {
   let wb;
   if (/\.csv$/i.test(name)) {
     let text = new TextDecoder('utf-8').decode(buf);
@@ -190,16 +206,53 @@ function sheetRows(buf, name) {
   } else {
     wb = XLSX.read(buf, { type: 'array' });
   }
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  return XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false, blankrows: false });
+  return wb.SheetNames.map(n => ({ name: n, rows: XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: '', raw: false, blankrows: false }) }));
 }
 
-async function importFile(file) {
-  const buf = await file.arrayBuffer();
-  if (/\.json$/i.test(file.name)) return importBackup(buf);
-  const rows = sheetRows(buf, file.name);
-  let hi = rows.findIndex((r, i) => i < 8 && r.some(c => HEAD_ALIASES[norm(c)] === 'num'));
-  if (hi < 0) throw new Error('לא נמצאה עמודה "מספר מבנה" בקובץ');
+/* נמענים: עמודות אתר / תפקיד / אימייל (אתר ריק = מקבל את כל האתרים) */
+const RC_ALIASES = (() => {
+  const m = {};
+  const add = (k, l) => l.forEach(x => (m[norm(x)] = k));
+  add('site', ['אתר', 'שם אתר', 'ישוב', 'site']);
+  add('role', ['תפקיד', 'role']);
+  add('email', ['אימייל', 'אי מייל', 'מייל', 'דואל', 'כתובת מייל', 'כתובת אימייל', 'email', 'e-mail', 'mail']);
+  add('name', ['שם', 'שם הנמען', 'שם איש קשר', 'name']);
+  return m;
+})();
+const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
+const rcKey = r => norm(r.site) + '|' + r.email.toLowerCase();
+function findHeader(rows, kind) {
+  const hi = rows.findIndex((r, i) => i < 8 && r.some(c => (kind === 'num' ? HEAD_ALIASES[norm(c)] : RC_ALIASES[norm(c)]) === kind));
+  return hi;
+}
+function sheetKind(rows) {
+  if (findHeader(rows, 'num') >= 0) return 'buildings';
+  if (findHeader(rows, 'email') >= 0) return 'recipients';
+  return '';
+}
+
+async function importRecipients(rows) {
+  const hi = findHeader(rows, 'email');
+  const map = rows[hi].map(c => RC_ALIASES[norm(c)] || '');
+  const have = new Map(S.recipients.map(r => [rcKey(r), r]));
+  let added = 0, updated = 0, bad = 0;
+  for (const row of rows.slice(hi + 1)) {
+    const get = k => { const i = map.indexOf(k); return i < 0 ? '' : cleanTxt(row[i]); };
+    const emails = get('email').split(/[;,\s]+/).filter(Boolean);
+    if (!emails.length) continue;
+    for (const email of emails) {
+      if (!EMAIL_RE.test(email)) { bad++; continue; }
+      const rec = { site: get('site'), role: get('role'), name: get('name'), email };
+      const k = rcKey(rec);
+      if (have.has(k)) { Object.assign(have.get(k), rec); updated++; } else { have.set(k, rec); S.recipients.push(rec); added++; }
+    }
+  }
+  await DB.setMeta('recipients', S.recipients);
+  return `נמענים: נוספו ${added}, עודכנו ${updated}` + (bad ? `\nכתובות לא תקינות (דולגו): ${bad}` : '');
+}
+
+async function importBuildings(rows) {
+  const hi = findHeader(rows, 'num');
   const heads = rows[hi].map(c => String(c).trim());
   const map = heads.map(h => HEAD_ALIASES[norm(h)] || (h ? 'extra:' + h : ''));
   const stat = { added: 0, updated: 0, skipped: 0, nokey: 0, dup: 0 };
@@ -228,6 +281,19 @@ async function importFile(file) {
     (stat.skipped ? `\nדולגו ${stat.skipped} מבנים שכבר נחתמו` : '') +
     (stat.dup ? `\nשורות כפולות (אותו מספר מבנה + אתר) אוחדו: ${stat.dup}` : '') +
     (stat.nokey ? `\nשורות ללא מספר מבנה (לא יובאו): ${stat.nokey}` : '');
+}
+
+async function importFile(file) {
+  const buf = await file.arrayBuffer();
+  if (/\.json$/i.test(file.name)) return importBackup(buf);
+  const msgs = [];
+  for (const sh of workbookSheets(buf, file.name)) {
+    const kind = sheetKind(sh.rows);
+    if (kind === 'buildings') msgs.push(await importBuildings(sh.rows));
+    else if (kind === 'recipients') msgs.push(await importRecipients(sh.rows));
+  }
+  if (!msgs.length) throw new Error('לא נמצאה עמודה "מספר מבנה" (מבנים) או "אימייל" (נמענים) בקובץ');
+  return msgs.join('\n');
 }
 
 /* ============ ייצוא ============ */
@@ -394,7 +460,7 @@ function renderForm(rec) {
   const dis = locked ? 'disabled' : '';
   const root = $('#v-form');
   root.innerHTML = `
-    ${locked ? `<div class="banner">✔ נחתם ב-${fmtDate(rec.signedAt)}</div>` : ''}
+    ${locked ? `<div class="banner">✔ נחתם ב-${fmtDate(rec.signedAt)}${rec.filePath ? `<br><small>נשמר ב-${esc(rec.filePath)}</small>` : ''}</div>` : ''}
     <div class="card"><h2>פרטי המבנה</h2>
       <div class="grid2">
         <div class="fld"><label>מספר מבנה</label><input value="${esc(rec.num)}" disabled></div>
@@ -435,7 +501,10 @@ function renderForm(rec) {
     }
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (act === 'finish') finishFlow(rec);
-    else if (act === 'dl') download(rec.pdf, rec.pdfName);
+    else if (act === 'dl') {
+      if (NATIVE) savePdfToFolder(rec).then(r => toast('נשמר ב-' + r.path, 5000)).catch(e => toast('שגיאה בשמירה: ' + (e.message || e), 6000));
+      else download(rec.pdf, rec.pdfName);
+    }
     else if (act === 'share') shareFlow(rec);
     else if (act === 'reopen') {
       const ok = await ask('לפתוח את הטופס לעריכה? קובץ ה-PDF הקיים יימחק ויווצר מחדש בסיום.', [{ t: 'ביטול', v: false }, { t: 'פתח לעריכה', v: true, cls: 'danger' }]);
@@ -466,12 +535,28 @@ async function finishFlow(rec) {
       rec.signedAt = signIso;
       rec.exportedAt = '';
       await saveNow(rec);
-      toast('ה-PDF נשמר במכשיר');
+      if (NATIVE) {
+        try { const r = await savePdfToFolder(rec); toast('ה-PDF נשמר ב-' + r.path, 5000); }
+        catch (e) { toast('ה-PDF נשמר באפליקציה, אך השמירה לתיקייה נכשלה: ' + (e.message || e), 7000); }
+      } else toast('ה-PDF נשמר במכשיר');
       renderForm(rec);
     }
   });
 }
+async function savePdfToFolder(rec) {
+  const r = await nativeSave(rec.pdf, rec.pdfName, '');
+  rec.fileUri = r.uri; rec.filePath = r.path;
+  await saveNow(rec);
+  return r;
+}
 async function shareFlow(rec) {
+  if (NATIVE) {
+    try {
+      const r = await savePdfToFolder(rec);
+      await Native.sendEmail({ to: [], uris: [r.uri], subject: rec.pdfName, body: '', title: 'שיתוף PDF', type: 'application/pdf' });
+    } catch (e) { toast('שגיאה: ' + (e.message || e), 5000); }
+    return;
+  }
   const file = new File([rec.pdf], rec.pdfName, { type: 'application/pdf' });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try { await navigator.share({ files: [file], title: rec.pdfName }); } catch (_) { /* בוטל */ }
@@ -482,12 +567,74 @@ function renderExport() {
   const recs = sortedRecs(), signed = recs.filter(isSigned);
   $('#cfgState').textContent = !CFG_CUSTOM ? 'כרגע: ברירת מחדל גנרית (ללא לוגו)' : 'כרגע: ' + CFG.docTitle + (CFG.logo ? ' · עם לוגו' : '');
   $('#expStats').textContent = `${recs.length} מבנים · ${signed.length} חתומים · ${signed.filter(r => !r.exportedAt).length} טרם יוצאו`;
+  renderRecipients(); renderMail();
+  if (NATIVE) {
+    $('#swState').textContent = '✔ אפליקציית אנדרואיד – עובדת ללא קליטה. גרסה ' + APP_VERSION + '. תיקיית שמירה: Documents/' + folderName();
+    $('#persistState').textContent = ''; return;
+  }
   $('#swState').textContent = ('serviceWorker' in navigator && navigator.serviceWorker.controller)
     ? '✔ האפליקציה שמורה במכשיר ועובדת גם בלי קליטה. גרסה ' + APP_VERSION
     : 'האפליקציה עדיין לא שמורה לעבודה אופליין – פתח אותה פעם אחת עם אינטרנט. גרסה ' + APP_VERSION;
   navigator.storage?.persisted?.().then(p => { $('#persistState').textContent = p ? 'אחסון קבוע: מופעל' : 'אחסון קבוע: לא הופעל (מומלץ לייצא גיבוי מדי פעם)'; });
 }
 function note(el, msg) { el.textContent = msg; el.hidden = false; }
+
+/* ============ נמענים ושליחה במייל ============ */
+function recipientsFor(site) {
+  const seen = new Set(), out = [];
+  S.recipients.filter(r => !r.site || norm(r.site) === norm(site)).forEach(r => {
+    const k = r.email.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(r); }
+  });
+  return out;
+}
+function renderRecipients() {
+  const el = $('#rcList');
+  el.innerHTML = S.recipients.length
+    ? S.recipients.map((r, i) => `<div class="rc"><div><b>${esc(r.email)}</b><span>${esc(r.site || 'כל האתרים')}${r.role ? ' · ' + esc(r.role) : ''}</span></div><button class="btn small" data-del="${i}" aria-label="מחק">✕</button></div>`).join('')
+    : '<p class="hint">אין נמענים עדיין.</p>';
+}
+function unsentSigned() {
+  const only = $('#onlyUnsent').checked;
+  return sortedRecs().filter(r => isSigned(r) && (!only || !r.emailedAt));
+}
+function renderMail() {
+  const bySite = new Map();
+  unsentSigned().forEach(r => { const k = r.site || ''; (bySite.get(k) || bySite.set(k, []).get(k)).push(r); });
+  $('#mailList').innerHTML = bySite.size ? [...bySite].map(([site, recs]) => {
+    const rc = recipientsFor(site);
+    return `<div class="mailrow"><div><b>${esc(site) || 'ללא אתר'}</b> · ${recs.length} קבצים<span class="${rc.length ? '' : 'warn'}">${rc.length ? 'אל: ' + esc(rc.map(r => r.email).join(', ')) : 'אין נמענים לאתר הזה – תבחר נמען במייל'}</span></div><button class="btn primary small" data-send="${esc(site)}">${NATIVE ? 'פתח מייל' : 'שלח'}</button></div>`;
+  }).join('') : '<p class="hint">אין טפסים חתומים לשליחה.</p>';
+}
+async function sendSite(site) {
+  const recs = unsentSigned().filter(r => (r.site || '') === site);
+  if (!recs.length) return;
+  const to = recipientsFor(site).map(r => r.email);
+  const parts = Math.ceil(recs.length / MAIL_CHUNK), day = fmtDay(new Date().toISOString());
+  const wait = modal('<p class="msg">מכין את הקבצים…</p>');
+  try {
+    for (let p = 0; p < parts; p++) {
+      const chunk = recs.slice(p * MAIL_CHUNK, (p + 1) * MAIL_CHUNK);
+      const subject = `${CFG.docTitle} - ${site || 'ללא אתר'} - ${day}` + (parts > 1 ? ` (${p + 1}/${parts})` : '');
+      const body = `מצורפים ${chunk.length} טפסים חתומים:\n` + chunk.map(r => `• מבנה ${r.num}`).join('\n');
+      if (NATIVE) {
+        const uris = [];
+        for (const r of chunk) { await ensurePdf(r); uris.push((await savePdfToFolder(r)).uri); }
+        wait.close();
+        await Native.sendEmail({ to, uris, subject, body, title: 'שליחת טפסים' });
+      } else {
+        wait.close();
+        const zip = new JSZip();
+        for (const r of chunk) zip.file(r.pdfName || pdfFileName(r), await ensurePdf(r));
+        download(await zip.generateAsync({ type: 'blob', compression: 'STORE' }), `forms-${today()}-${p + 1}.zip`);
+        location.href = `mailto:${to.join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body + '\n\n(צרף את קובץ ה-ZIP שהורד)')}`;
+      }
+      const ok = await ask(`האם שלחת את המייל (${p + 1}/${parts})?\nאם כן, נסמן את ${chunk.length} הטפסים כנשלחו.`, [{ t: 'עוד לא', v: false }, { t: 'נשלח', v: true, cls: 'primary' }]);
+      if (ok) { chunk.forEach(r => (r.emailedAt = new Date().toISOString())); await DB.putMany(chunk); }
+      else break;
+    }
+  } catch (e) { wait.close(); toast('שגיאה: ' + (e.message || e), 6000); }
+  renderExport();
+}
 
 async function exportZip() {
   let recs = sortedRecs().filter(isSigned);
@@ -550,6 +697,21 @@ function wire() {
   $('#cfgReset').addEventListener('click', async () => {
     await DB.setCfg(null); applyConfig(null); note($('#cfgMsg'), 'הוחזרה ברירת המחדל הגנרית'); renderExport();
   });
+  $('#onlyUnsent').addEventListener('change', renderMail);
+  $('#mailList').addEventListener('click', e => { const b = e.target.closest('[data-send]'); if (b) sendSite(b.dataset.send); });
+  $('#rcList').addEventListener('click', async e => {
+    const b = e.target.closest('[data-del]'); if (!b) return;
+    S.recipients.splice(+b.dataset.del, 1); await DB.setMeta('recipients', S.recipients); renderExport();
+  });
+  $('#rcAdd').addEventListener('click', async () => {
+    const email = cleanTxt($('#rcEmail').value), site = cleanTxt($('#rcSite').value), role = cleanTxt($('#rcRole').value);
+    if (!EMAIL_RE.test(email)) return toast('כתובת אימייל לא תקינה');
+    const rec = { site, role, name: '', email }, k = rcKey(rec);
+    const ex = S.recipients.find(r => rcKey(r) === k);
+    if (ex) ex.role = role; else S.recipients.push(rec);
+    await DB.setMeta('recipients', S.recipients);
+    $('#rcEmail').value = ''; $('#rcRole').value = ''; renderExport();
+  });
   $('#tplBtn').addEventListener('click', () => {
     const ex = [];
     const ws = XLSX.utils.aoa_to_sheet([COLS_CORE.map(c => c[0])]);
@@ -577,6 +739,7 @@ async function init() {
   net(); addEventListener('online', net); addEventListener('offline', net);
   await DB.open();
   applyConfig(await DB.getCfg());
+  S.recipients = (await DB.getMeta('recipients')) || [];
   for (const r of await DB.all()) {
     fillSigners(r);
     if (r.num === undefined) { /* הגירה מגרסה ישנה: המזהה היה מספר מבנה בלבד */
@@ -586,6 +749,6 @@ async function init() {
   }
   wire(); route();
   navigator.storage?.persist?.();
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').then(() => renderExport()).catch(() => {});
+  if (!NATIVE && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').then(() => renderExport()).catch(() => {});
 }
 init().catch(err => { document.body.insertAdjacentHTML('afterbegin', `<p style="padding:20px;color:#c0392b">שגיאה בטעינת האפליקציה: ${esc(err.message)}</p>`); });

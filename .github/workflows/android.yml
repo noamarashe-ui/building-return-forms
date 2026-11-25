@@ -1,0 +1,67 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app.js'
+      - 'index.html'
+      - 'style.css'
+      - 'lib/**'
+      - 'fonts/**'
+      - 'icons/**'
+      - 'android/**'
+      - 'capacitor.config.json'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/**'
+      - '.github/workflows/android.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Bundle web app into the Android project
+        run: npm run sync
+
+      - name: Build APK
+        working-directory: android
+        run: ./gradlew assembleDebug -Pvc=${{ github.run_number }} --no-daemon --stacktrace
+
+      - name: Name the APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk field-forms.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: field-forms-apk
+          path: field-forms.apk
+
+      - name: Publish as the "latest" release (direct download link)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest field-forms.apk \
+            --title "Latest Android build" \
+            --notes "Build #${{ github.run_number }} from commit ${{ github.sha }}. Install by opening this file on the phone."

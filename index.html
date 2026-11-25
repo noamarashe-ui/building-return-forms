@@ -58,6 +58,25 @@
     </div>
 
     <div class="card">
+      <h2>נמענים למייל</h2>
+      <p class="hint">אפשר לייבא גיליון בשם "נמענים" בקובץ האקסל (עמודות: אתר, תפקיד, אימייל – אתר ריק = מקבל את כל האתרים), או להוסיף ידנית.</p>
+      <div id="rcList"></div>
+      <div class="rcform">
+        <input id="rcSite" placeholder="אתר (ריק = כולם)">
+        <input id="rcRole" placeholder="תפקיד">
+        <input id="rcEmail" type="email" inputmode="email" placeholder="אימייל">
+        <button class="btn primary" id="rcAdd">הוסף</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>שליחה במייל</h2>
+      <p class="hint">מייל אחד לכל אתר, עם הטפסים החתומים של האתר מצורפים. אפליקציית המייל נפתחת עם הנמענים, והשליחה בלחיצה שלך.</p>
+      <label class="chk"><input type="checkbox" id="onlyUnsent" checked> רק טפסים שטרם נשלחו</label>
+      <div id="mailList"></div>
+    </div>
+
+    <div class="card">
       <h2>ייצוא</h2>
       <div id="expStats" class="hint"></div>
       <div class="row col">

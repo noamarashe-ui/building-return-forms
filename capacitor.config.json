@@ -1,0 +1,7 @@
+{
+  "appId": "com.fieldforms.app",
+  "appName": "טפסי שטח",
+  "webDir": "www",
+  "server": { "androidScheme": "https" },
+  "android": { "allowMixedContent": false }
+}

@@ -1,6 +1,6 @@
 'use strict';
 /* ============ הגדרות ============ */
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.4.1';
 const NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 const Native = NATIVE ? window.Capacitor.registerPlugin('FormsFiles') : null;
 const ZIP_CHUNK = NATIVE ? 25 : 60; // כמה PDF בכל קובץ ZIP
@@ -680,13 +680,21 @@ function wire() {
   window.addEventListener('hashchange', route);
   document.addEventListener('visibilitychange', () => { if (document.hidden && S.cur) saveNow(S.cur).catch(() => {}); });
 
+  /* כפתורי בחירת קובץ: לחיצה תכנותית על ה-input (עובד גם ב-WebView של אנדרואיד). באנדרואיד ללא סינון סוגים כדי שכל הקבצים יוצגו */
+  if (NATIVE) $$('input[type=file]').forEach(i => i.removeAttribute('accept'));
+  $('#impBtn').addEventListener('click', () => $('#impFile').click());
+  $('#cfgBtn').addEventListener('click', () => $('#cfgFile').click());
+  window.addEventListener('error', e => toast('שגיאה: ' + e.message, 6000));
+  window.addEventListener('unhandledrejection', e => toast('שגיאה: ' + ((e.reason && e.reason.message) || e.reason), 6000));
   $('#impFile').addEventListener('change', async e => {
     const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    note($('#impMsg'), 'קורא את הקובץ: ' + f.name + ' …');
     try { note($('#impMsg'), await importFile(f)); renderExport(); }
     catch (err) { note($('#impMsg'), 'שגיאה בייבוא: ' + err.message); }
   });
   $('#cfgFile').addEventListener('change', async e => {
     const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    note($('#cfgMsg'), 'קורא את הקובץ: ' + f.name + ' …');
     try {
       const cfg = JSON.parse(await f.text());
       if (!Array.isArray(cfg.signers) || !cfg.signers.length || !Array.isArray(cfg.paragraphs) || !cfg.docTitle) throw new Error('קובץ הגדרות לא תקין');

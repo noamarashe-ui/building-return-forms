@@ -40,7 +40,8 @@
       <h2>ייבוא מבנים</h2>
       <p class="hint">קובץ Excel או CSV עם העמודות: מספר מבנה, שם אתר, קהילה, שמות נציגים (אפשר להשאיר ריק), ושדות השאלות. מבנים שכבר נחתמו לא יידרסו.</p>
       <div class="row">
-        <label class="btn primary filebtn">בחר קובץ לייבוא<input id="impFile" type="file" accept=".xlsx,.xls,.csv,.json" hidden></label>
+        <button class="btn primary" id="impBtn" type="button">בחר קובץ לייבוא</button>
+        <input id="impFile" type="file" class="offscreen" accept=".xlsx,.xls,.csv,.json" tabindex="-1">
         <button class="btn" id="tplBtn">הורד תבנית Excel</button>
       </div>
       <div id="impMsg" class="note" hidden></div>
@@ -51,7 +52,8 @@
       <p class="hint">קובץ הגדרות (JSON) שמכיל את נוסח הטופס, הלוגו ושמות החותמים. נטען פעם אחת ונשמר במכשיר.</p>
       <p class="hint" id="cfgState"></p>
       <div class="row">
-        <label class="btn filebtn">טען קובץ הגדרות<input id="cfgFile" type="file" accept=".json,application/json" hidden></label>
+        <button class="btn" id="cfgBtn" type="button">טען קובץ הגדרות</button>
+        <input id="cfgFile" type="file" class="offscreen" accept=".json,application/json" tabindex="-1">
         <button class="btn" id="cfgReset">חזרה לברירת מחדל</button>
       </div>
       <div id="cfgMsg" class="note" hidden></div>

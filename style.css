@@ -99,3 +99,4 @@ canvas.pad{display:block;width:100%;height:min(46vh,300px);touch-action:none;cur
 .btn.small{padding:8px 12px;min-height:40px;flex:0 0 auto}
 .rcform{display:grid;gap:8px;margin-top:8px}
 .banner small{font-weight:400}
+.offscreen{position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:0;overflow:hidden}

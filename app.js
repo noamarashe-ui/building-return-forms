@@ -5,7 +5,7 @@ window.addEventListener('error', e => {
   try { document.body.insertAdjacentHTML('afterbegin', '<p style="padding:10px;margin:0;color:#c0392b;background:#fff;font:14px sans-serif">שגיאה: ' + String(e.message).replace(/</g, '&lt;') + '</p>'); } catch (_) { /* ignore */ }
 });
 /* ============ הגדרות ============ */
-const APP_VERSION = '1.4.2';
+const APP_VERSION = '1.4.3';
 const NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 /* ב-WebView של Capacitor ללא bundler אין registerPlugin; קוראים לתוסף דרך nativePromise */
 const Native = NATIVE ? {

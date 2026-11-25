@@ -7,7 +7,7 @@ android {
         applicationId "com.fieldforms.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode (project.findProperty("vc") ?: "1").toInteger()
+        versionCode Integer.valueOf((project.findProperty("vc") ?: "1").toString())
         versionName "1.4.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
